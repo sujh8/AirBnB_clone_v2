@@ -1,73 +1,75 @@
 #!/usr/bin/python3
-"""Defines the FileStorage class."""
-import json
-from models.base_model import BaseModel
-from models.amenity import Amenity
+
+"""
+A module that defines extensively the database storage for this project
+"""
+from os import getenv
+from models.base_model import Base
+from models.user import User
 from models.city import City
+from models.state import State
 from models.place import Place
 from models.review import Review
-from models.state import State
-from models.user import User
+from models.amenity import Amenity
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.orm import scoped_session
 
 
-class FileStorage:
-    """Represent an abstracted storage engine.
+class DBStorage:
+    """Database utilities definition"""
+    __engine = None
+    __session = None
 
-    Attributes:
-        __file_path (str): The name of the file to save objects to.
-        __objects (dict): A dictionary of instantiated objects.
-    """
-
-    __file_path = "file.json"
-    __objects = {}
+    def __init__(self):
+        """Instantiation method"""
+        self.__engine = create_engine('mysql+mysqldb://{}:{}@{}/{}'.format(
+            getenv('HBNB_MYSQL_USER'), getenv('HBNB_MYSQL_PWD'),
+            getenv('HBNB_MYSQL_HOST'), getenv('HBNB_MYSQL_DB')
+            ),
+            pool_pre_ping=True
+        )
+        if getenv('HBNB_ENV') == 'test':
+            Base.metadata.drop_all(self.__engine)
 
     def all(self, cls=None):
-        """Return a dictionary of instantiated objects in __objects.
-
-        If a cls is specified, returns a dictionary of objects of that type.
-        Otherwise, returns the __objects dictionary.
-        """
-        if cls is not None:
-            if type(cls) == str:
-                cls = eval(cls)
-            cls_dict = {}
-            for k, v in self.__objects.items():
-                if type(v) == cls:
-                    cls_dict[k] = v
-            return cls_dict
-        return self.__objects
+        """Makes a query to the database
+        if cls is given, query for cls only else query for all"""
+        objs = []
+        if cls is None:
+            Classes = [User, City, State, Place, Review, Amenity]
+            try:
+                for Class in Classes:
+                    objs = objs + self.__session.query(Class).all()
+            except Exception:
+                pass
+        else:
+            Class = eval(cls) if type(cls) == str else cls
+            objs = self.__session.query(Class).all()
+        return {'{}.{}'.format(type(o).__name__, o.id): o for o in objs}
 
     def new(self, obj):
-        """Set in __objects obj with key <obj_class_name>.id."""
-        self.__objects["{}.{}".format(type(obj).__name__, obj.id)] = obj
+        """Adds the object to the current database session"""
+        self.__session.add(obj)
 
     def save(self):
-        """Serialize __objects to the JSON file __file_path."""
-        odict = {o: self.__objects[o].to_dict() for o in self.__objects.keys()}
-        with open(self.__file_path, "w", encoding="utf-8") as f:
-            json.dump(odict, f)
-
-    def reload(self):
-        """Deserialize the JSON file __file_path to __objects, if it exists."""
-        try:
-            with open(self.__file_path, "r", encoding="utf-8") as f:
-                for o in json.load(f).values():
-                    name = o["__class__"]
-                    del o["__class__"]
-                    self.new(eval(name)(**o))
-        except FileNotFoundError:
-            pass
+        """Commits all changes of the current database session"""
+        self.__session.commit()
 
     def delete(self, obj=None):
-        """Delete a given object from __objects, if it exists."""
-        try:
-            del self.__objects["{}.{}".format(type(obj).__name__, obj.id)]
-        except (AttributeError, KeyError):
-            pass
+        """Deletes from the current database session"""
+        if obj is not None:
+            self.__session.delete(obj)
+
+    def reload(self):
+        """Create all tables in the database"""
+        Base.metadata.create_all(self.__engine)
+        session_factory = sessionmaker(
+            bind=self.__engine, expire_on_commit=False
+        )
+        Session = scoped_session(session_factory)
+        self.__session = Session()
 
     def close(self):
-        """Call the reload method."""
-        self.reload()
-
-
-
+        """Dispose of the current Session, if present."""
+        self.__session.close()
